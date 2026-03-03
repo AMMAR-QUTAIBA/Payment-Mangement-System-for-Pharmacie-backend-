@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1762729923928,
+      "tag": "0000_worried_vision",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1769443216476,
+      "tag": "0001_pale_misty_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1771788018320,
+      "tag": "0002_bright_toad_men",
+      "breakpoints": true
+    }
+  ]
+}
