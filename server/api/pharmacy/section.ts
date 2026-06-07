@@ -23,7 +23,7 @@ const app = new Hono()
       if (!creat_section) return c.json({error:"failed to create section"}, 500);
       return c.json({ message: "section created successfully", section: creat_section });
     } catch (error) {
-      //return c.json({ error: "creat section error" }, 500);
+      
       return c.json(error)
     }
   })
@@ -86,6 +86,23 @@ const app = new Hono()
     }
     catch{
       return c.json({error:"delete section error"},500)
+    }
+  })
+  .patch("/assign_medicine", async (c) => {
+    const check = await isadmin();
+    if (check == false) return c.json({error:"request denied, you are not admin"}, 403);
+    try {
+      const { medicine_id, section_id } = await c.req.json();
+      if (!medicine_id) return c.json({error:"medicine_id is required"}, 400);
+      if (!section_id) return c.json({error:"section_id is required"}, 400);
+      const [updated] = await db.update(medicine)
+        .set({ section: Number(section_id) })
+        .where(eq(medicine.id, Number(medicine_id)))
+        .returning();
+      if (!updated) return c.json({error:"medicine not found"}, 404);
+      return c.json({message:"medicine assigned to section successfully", medicine: updated});
+    } catch {
+      return c.json({error:"error assigning medicine to section"}, 500);
     }
   })
 export default app;

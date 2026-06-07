@@ -13,7 +13,7 @@ const sessionid=crypto.randomBytes(64).toString('hex').normalize();
 const createdAt=new Date().toISOString()
    cookieStore.set('sessionid',sessionid, {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
     maxAge:60*60*24*7,
     path: '/',

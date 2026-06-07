@@ -1,12 +1,13 @@
 'use server'
 import{createUsercookies, delUserSession, get_user, get_user_sessionid} from"@/lib/auth/session"
-import { eq } from 'drizzle-orm';
+import { eq, count } from 'drizzle-orm';
 import { db } from "../db/config/db_config";
 import { users } from "../db/schema";
 import { session} from "../db/schema/session";
 import { valid_password } from '@/lib/auth/valid_password';
 import { compare_password, passwordhasing, rand_salt } from '@/lib/auth/passwordhasing';
 import { cookies } from "next/headers";
+
 export async function signin(email:string,password:string) {
     const [user]=await db.select().from(users).where(eq(users.email,email))
     if(user==null)
@@ -30,9 +31,12 @@ export async function signUp({password,email,name,role}:{email:string,password:s
      if(check_pass!=null)
         return check_pass 
     try{
+  
+    const [{ total }] = await db.select({ total: count() }).from(users)
+    const assignedRole = total === 0 ? 'admin' : (role ?? 'user')
     const salt=rand_salt();
     const hashpassword=await passwordhasing(password,salt)
-    const [user]=await db.insert(users).values({name:name,password:hashpassword,email:email,salt:salt,role:role??'user',creatAt:new Date().toISOString()}).returning({
+    const [user]=await db.insert(users).values({name:name,password:hashpassword,email:email,salt:salt,role:assignedRole,creatAt:new Date().toISOString()}).returning({
   id: users.id,
   email: users.email,
   role: users.role,
@@ -71,6 +75,24 @@ export async function isadmin() {
     const [data2]=(await db.select().from(users).where(eq(users.id,data.userid)))
     if(data2.role=='admin')      
     return true;
+    
+    const owner_id=Number(process.env.owner_id)
+    if(data2.id==owner_id)      
+    return true;
+else
+    return false;
+}
+export async function isowner() {
+    const user=await cookies()
+    const session_id=user.get('sessionid')?.value
+    if(!session_id)
+        return false
+    const [data]=await db.select().from(session).where(eq(session.sessionid,session_id));
+    if(!data)
+        return false
+     const owner_id=Number(process.env.owner_id)
+    if(data.userid==owner_id)      
+    return true;
 else
     return false;
 }
@@ -87,4 +109,17 @@ export async function session_username() {
         return null
     const username=data2[0].name
    return username
+}
+
+export async function setUserRole(targetUserId: number, newRole: 'admin' | 'user') {
+    const is_owner = await isowner()
+    if (!is_owner) return 'unauthorized'
+    const cookieStore = await cookies()
+    const session_id = cookieStore.get('sessionid')?.value
+    if (!session_id) return 'unauthorized'
+    const [sess] = await db.select().from(session).where(eq(session.sessionid, session_id))
+    if (sess?.userid === targetUserId && newRole === 'user')
+        return 'cannot demote yourself'
+    await db.update(users).set({ role: newRole }).where(eq(users.id, targetUserId))
+    return 'ok'
 }

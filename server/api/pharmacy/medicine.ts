@@ -1,38 +1,43 @@
 import { db } from "@/server/db/config/db_config";
 import { medicine } from "@/server/db/schema/medicines";
 import { Hono } from "hono";
-import { eq, and, desc, lte, gte, or } from "drizzle-orm";
+import { eq, and, desc, lte, gte, or, like, SQL, isNull } from "drizzle-orm";
 import { isadmin } from "@/server/auth/action";
 import { sendMail } from "@/lib/auth/send-mail"
+import { revalidatePath } from "next/cache"
 import fs from "fs"
-
 import { buffer } from "stream/consumers";
+import { get_user, get_user_sessionid } from "@/lib/auth/session";
 const app = new Hono()
-.get('/medicine/filter', async (c) => {
+.get('/filter', async (c) => {
     const data = c.req.query()
     const page = Number(c.req.query('page') ?? 1)
-  const pagesize = 15
+    const pagesize = 15
     try {
-      
-      const fields: {key: string, col: any, num?: boolean}[] = [
-        { key: 'medicine_name', col: medicine.medicine_name },
-        { key: 'manfacture',    col: medicine.manufacture },
-        { key: 'category',      col: medicine.category },
-        { key: 'addat',         col: medicine.addedAt },
-        { key: 'price',         col: medicine.price,           num: true },
-        { key: 'medicine_Amount', col: medicine.medicine_Amount, num: true },
-        { key: 'addedBy',       col: medicine.addedBy,         num: true },
-        { key: 'expire',        col: medicine.expire,          num: true },
-        { key: 'section',       col: medicine.section,         num: true },
-      ]
-      const conditions = fields
-        .filter(f => data[f.key])
-        .map(f => eq(f.col, f.num ? Number(data[f.key]) : data[f.key]))
-            
-      const filter = await db.select().from(medicine).where(and(...conditions)).offset((page - 1) * pagesize).limit(pagesize)
+      const conditions: SQL[] = []
+
+      if (data['medicine_name'])
+        conditions.push(like(medicine.medicine_name, `%${data['medicine_name']}%`))
+      if (data['category'])
+        conditions.push(eq(medicine.category, data['category']))
+      if (data['section'])
+        conditions.push(eq(medicine.section, Number(data['section'])))
+
+      const filter = await db.select().from(medicine)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .offset((page - 1) * pagesize).limit(pagesize)
       return c.json(filter)
     } catch {
       return c.json({error: "Database error"}, 500)
+    }
+})
+.get("/medicine_without_section", async (c) => {
+    try{
+       
+       const medicine_without_section = await db.select().from(medicine).where(isNull(medicine.section))
+       return c.json(medicine_without_section)
+    }catch{
+        return c.json({error: "Database error"}, 500)
     }
 })
 .get("/medicine/expire",async(c)=>{
@@ -75,7 +80,12 @@ const app = new Hono()
     const expire= new Date(String(body["expire"])).getTime();
     const medicine_Amount= Number(body["medicine_Amount"]);
     const manufacture= String(body["manufacture"]);
-    const addedBy= Number(body["addedBy"]);
+    const session = await get_user()
+    if(!session||session.length==0)
+      return c.json({ error: "session expired, please login again" }, 401)
+    const addedBy_id =session[0].userid
+    if (!addedBy_id)
+      return c.json({ error: "session expired, please login again" }, 401)
     const category= String(body["category"]);
     const description= String(body["description"]);
     const sectionId= Number(body["section"]);
@@ -88,7 +98,7 @@ const app = new Hono()
        const filepath=`./public/uplods/${image.name}`
        
         const url=`/uplods/${image.name}`
-    const checked = await check_data(medicine_name, expire, medicine_Amount, manufacture, addedBy, category, description, price, sectionId)
+    const checked = await check_data(medicine_name, expire, medicine_Amount, manufacture, addedBy_id, category, description, price, sectionId)
     if (checked.flag == false)
       return c.json({error: checked.message}, 400)
 
@@ -97,13 +107,15 @@ const app = new Hono()
       await fs.promises.writeFile(filepath, buffer)
       const [save] = await db.insert(medicine).values({
         medicine_name, price, expire, medicine_Amount, manufacture,
-        addedBy, category, description, section: sectionId, image: url
+        addedBy:addedBy_id, category, description, section: sectionId, image: url
       }).returning()
       if (!save) {
      
         await fs.promises.unlink(filepath).catch(() => {})
         return c.json({error: "failed to save medicine"}, 500)
       }
+      revalidatePath('/medicines')
+      revalidatePath('/')
       return c.json({message: "Medicine saved successfully", medicine: save})
     } catch (error) {
      
@@ -122,12 +134,16 @@ const app = new Hono()
       const medicine_data=await db.select().from(medicine).where(eq(medicine.id,id))
       if(!medicine_data[0])
          return c.json({error: "medicine not found"}, 404)
-      if(!medicine_data[0].image)
-         return c.json({error: "image error"}, 400)
-        await fs.promises.unlink(`./public${medicine_data[0].image}`)
+      if(medicine_data[0].image) {
+        try {
+          await fs.promises.unlink(`./public${medicine_data[0].image}`)
+        } catch {}
+      }
       const [del] = await db.delete(medicine).where(eq(medicine.id, id)).returning()
       if (!del) 
         return c.json({error: "medicine not found"}, 404)
+      revalidatePath('/medicines')
+      revalidatePath('/')
       return c.json({message: "medicine deleted successfully", medicine: del})
     } catch {
       return c.json({error: "delete error, try again"}, 500)
@@ -147,14 +163,20 @@ const app = new Hono()
     const expire= Number(new Date(String(body["expire"])))
     const medicine_Amount= Number(body["medicine_Amount"]);
     const manufacture= String(body["manufacture"]);
-    const addedBy= Number(body["addedBy"]);
     const category= String(body["category"]);
     const description= String(body["description"]);
     const price= Number(body["price"]);
     const sectionId= Number(body["section"]);
     const image= body["image"];
+    
+    const session = await get_user()
+    if (!session || session.length === 0)
+      return c.json({ error: "session expired, please login again" }, 401)
+    const addedBy = session[0].userid
+    if (!addedBy)
+      return c.json({ error: "session expired, please login again" }, 401)
      let url=""
-    if(image instanceof File){
+    if(image instanceof File && image.size > 0){
       const arraybuffer=await image.arrayBuffer()
        const buffer=await Buffer.from(arraybuffer)
        const filepath=`./public/uplods/${image.name}`
@@ -170,6 +192,8 @@ const app = new Hono()
        }).where(eq(medicine.id, id)).returning()
        if (!updated)
          return c.json({error: "medicine not found"}, 404)
+       revalidatePath('/medicines')
+       revalidatePath('/')
        return c.json({message: "medicine updated successfully", medicine: updated})
     } catch(error) {
       
